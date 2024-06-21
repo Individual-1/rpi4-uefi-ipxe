@@ -2,7 +2,7 @@
 set -euxo pipefail
 
 # see https://github.com/ipxe/ipxe
-IPXE_VERSION='df2f23e333601e587f72c68cb7b7b116796f9d3c' # 2024-03-13T14:48:44Z
+#IPXE_VERSION='df2f23e333601e587f72c68cb7b7b116796f9d3c' # 2024-03-13T14:48:44Z
 
 # see https://github.com/pftf/RPi4/releases
 RPI4_UEFI_VERSION='v1.36'
@@ -93,27 +93,29 @@ unzip -l "$RPI4_UEFI_IPXE_ZIP_PATH"
 popd
 # package it as a image zip file.
 rm -f "$RPI4_UEFI_IPXE_IMG_PATH" "$RPI4_UEFI_IPXE_IMG_ZIP_PATH"
-truncate --size $((100*1024*1024)) "$RPI4_UEFI_IPXE_IMG_PATH"
-target_device="$(losetup --partscan --show --find "$RPI4_UEFI_IPXE_IMG_PATH")"
+truncate --size $((15*1024*1024)) "$RPI4_UEFI_IPXE_IMG_PATH"
 partition_type='gpt' # gpt or mbr.
 if [ "$partition_type" == 'gpt' ]; then
-    parted --script "$target_device" mklabel gpt
-    parted --script "$target_device" mkpart ESP fat32 4MiB 100%
-    parted --script "$target_device" set 1 esp on
+    offset1=$(parted --script "$RPI4_UEFI_IPXE_IMG_PATH" mklabel gpt \
+                mkpart ESP fat32 4MiB 100% \
+                set 1 esp on \
+                print | awk '$1 == 1 {gsub("B","",$2); print $2'}
+    )
 else
-    parted --script "$target_device" mklabel msdos
-    parted --script "$target_device" mkpart primary fat32 4MiB 100%
+    offset1=$(parted --script "$RPI4_UEFI_IPXE_IMG_PATH" mklabel msdos \
+                mkpart primary fat32 fat32 4MiB 100% \
+                print | awk '$1 == 1 {gsub("B","",$2); print $2'}
+    )
 fi
-mkfs -t vfat -F 32 -n RPI4-IPXE "${target_device}p1" # NB vfat label is truncated to 11 chars.
-parted --script "$target_device" unit MiB print
-sfdisk -l "$target_device"
+loop1=$(losetup -o $offset1 -f $RPI4_UEFI_IPXE_IMG_PATH --show)
+mkfs -t vfat -F 32 -n RPI4-IPXE "$loop1" # NB vfat label is truncated to 11 chars.
 target_path="$RPI4_UEFI_IPXE_IMG_PATH-boot"
 mkdir -p "$target_path"
-mount "${target_device}p1" "$target_path"
+mount "${loop1}" "$target_path"
 unzip "$RPI4_UEFI_IPXE_ZIP_PATH" -d "$target_path"
 umount "$target_path"
 rmdir "$target_path"
-losetup --detach "$target_device"
+losetup --detach "$loop1"
 pushd "$(dirname "$RPI4_UEFI_IPXE_IMG_PATH")"
 zip -9 --no-dir-entries \
     "$RPI4_UEFI_IPXE_IMG_ZIP_PATH" \
@@ -122,6 +124,8 @@ unzip -l "$RPI4_UEFI_IPXE_IMG_ZIP_PATH"
 popd
 rm "$RPI4_UEFI_IPXE_IMG_PATH"
 sha256sum rpi4-uefi-ipxe*.zip >sha256sum.txt
+
+cp rpi4-uefi-ipxe* sha256sum.txt $PWD/output
 
 # copy to the host when running from vagrant.
 if [ -d /vagrant ]; then
